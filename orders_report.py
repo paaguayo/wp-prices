@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import json
 import time
 
-from main import CONFIG, wcapi
+from config import CONFIG, wcapi
 
 
 def obtener_pedidos(dias=None):

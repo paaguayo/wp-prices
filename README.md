@@ -12,7 +12,7 @@ Script para extraer productos, ventas y métricas desde WooCommerce y generar re
 
 ## Configuración
 
-Los parámetros de ejecución están centralizados en el diccionario `CONFIG` dentro de `main.py`. Puedes sobrescribir las credenciales mediante variables de entorno:
+Los parámetros de ejecución están centralizados en el diccionario `CONFIG` dentro de `config.py`. Puedes sobrescribir las credenciales mediante variables de entorno:
 
 - `WC_API_URL`
 - `WC_CONSUMER_KEY`
