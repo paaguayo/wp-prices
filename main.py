@@ -1,24 +1,14 @@
 # main.py - Código completo con soporte de visitas
-from woocommerce import API
 import pandas as pd
 from datetime import datetime, timedelta
 import json
-import urllib3
 import time
 
-# Suprimir warnings SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from config import CONFIG, wcapi
 
 # ============================================
 # CONFIGURACIÓN
 # ============================================
-wcapi = API(
-    url="https://mcielectronics.cl",  # ⚠️ CAMBIA ESTO
-    consumer_key="ck_0c58ea3ea68db031865637fdafa225cb250ebb0b",  # ⚠️ CAMBIA ESTO
-    consumer_secret="cs_c80f40c74567be7a19da7d157a407ab727bc557a",  # ⚠️ CAMBIA ESTO
-    version="wc/v3",
-    timeout=30
-)
 
 # ============================================
 # FUNCIONES DE EXTRACCIÓN
@@ -27,14 +17,17 @@ def extraer_productos():
     """Obtiene todos los productos con sus datos relevantes + visitas"""
     productos = []
     page = 1
-    max_reintentos = 3
+    max_reintentos = CONFIG["max_reintentos"]
     
     while True:
         reintentos = 0
         while reintentos < max_reintentos:
             try:
                 print(f"📄 Extrayendo página {page}...", end=" ")
-                response = wcapi.get("products", params={"per_page": 100, "page": page})
+                response = wcapi.get(
+                    "products",
+                    params={"per_page": CONFIG["per_page"], "page": page},
+                )
                 
                 if response.status_code != 200:
                     print(f"❌ Error: {response.status_code}")
@@ -63,7 +56,7 @@ def extraer_productos():
                     visitas = 0
                     for meta in producto.get('meta_data', []):
                         # Post Views Counter guarda con esta clave
-                        if meta['key'] in ['_post_views_count', 'post_views_count', '_eael_post_view_count']:
+                        if meta['key'] in CONFIG["visitas_meta_keys"]:
                             try:
                                 visitas = int(meta['value'])
                                 break
@@ -84,15 +77,15 @@ def extraer_productos():
                 
                 print(f"✅ {len(data)} productos")
                 page += 1
-                time.sleep(1)
+                time.sleep(CONFIG["sleep_between_pages"])
                 break
                 
             except Exception as e:
                 reintentos += 1
                 print(f"⚠️ Intento {reintentos}/{max_reintentos} falló: {str(e)[:50]}...")
                 if reintentos < max_reintentos:
-                    print(f"   Esperando 5 segundos...")
-                    time.sleep(5)
+                    print(f"   Esperando {CONFIG['retry_sleep_seconds']} segundos...")
+                    time.sleep(CONFIG["retry_sleep_seconds"])
                 else:
                     print(f"❌ Error en página {page}")
                     return pd.DataFrame(productos)
@@ -103,19 +96,21 @@ def extraer_productos():
     print(f"\n📦 Total productos extraídos: {len(productos)}")
     return pd.DataFrame(productos)
 
-def extraer_ventas(dias=90):
+def extraer_ventas(dias=None):
     """Obtiene órdenes de los últimos X días - TODOS los estados que representan ventas"""
+    if dias is None:
+        dias = CONFIG["ventas_dias"]
     fecha_desde = (datetime.now() - timedelta(days=dias)).isoformat()
     
     # Estados que representan ventas reales
-    estados_validos = ['completed', 'processing', 'on-hold', 'listo-despacho', 'listo-retiro']
+    estados_validos = CONFIG["estados_validos"]
     
     ventas = []
     
     for estado in estados_validos:
         print(f"\n📊 Extrayendo órdenes con estado: {estado}")
         page = 1
-        max_reintentos = 3
+        max_reintentos = CONFIG["max_reintentos"]
         
         while True:
             reintentos = 0
@@ -123,7 +118,7 @@ def extraer_ventas(dias=90):
                 try:
                     print(f"   Página {page}...", end=" ")
                     response = wcapi.get("orders", params={
-                        "per_page": 100,
+                        "per_page": CONFIG["per_page"],
                         "page": page,
                         "after": fecha_desde,
                         "status": estado
@@ -162,14 +157,14 @@ def extraer_ventas(dias=90):
                     
                     print(f"✅ {len(data)} órdenes")
                     page += 1
-                    time.sleep(1)
+                    time.sleep(CONFIG["sleep_between_pages"])
                     break
                     
                 except Exception as e:
                     reintentos += 1
                     print(f"⚠️ Error: {str(e)[:30]}")
                     if reintentos < max_reintentos:
-                        time.sleep(5)
+                        time.sleep(CONFIG["retry_sleep_seconds"])
                     else:
                         break
             
@@ -213,9 +208,10 @@ def analizar_datos(df_productos, df_ventas):
         analisis['total_vendido'] / analisis['cantidad']
     ).fillna(0)
     
-    analisis['rotacion_dias'] = analisis['cantidad'] / 90  # ventas por día
-    analisis['facturacion_dia'] = analisis['total_vendido'] / 90  # $ por día
-    analisis['visitas_dia'] = analisis['visitas'] / 90  # visitas por día
+    periodo_dias = CONFIG["ventas_dias"]
+    analisis['rotacion_dias'] = analisis['cantidad'] / periodo_dias  # ventas por día
+    analisis['facturacion_dia'] = analisis['total_vendido'] / periodo_dias  # $ por día
+    analisis['visitas_dia'] = analisis['visitas'] / periodo_dias  # visitas por día
     
     # Convertir precio_actual a numérico
     analisis['precio_actual'] = pd.to_numeric(analisis['precio_actual'], errors='coerce').fillna(0)
@@ -294,10 +290,20 @@ def analizar_datos(df_productos, df_ventas):
     
     # Flags especiales
     analisis['sin_visitas'] = analisis['visitas'] == 0
-    analisis['sin_visitas_con_stock'] = (analisis['visitas'] == 0) & (analisis['stock'] > 5)
-    analisis['muchas_visitas_sin_ventas'] = (analisis['visitas'] > 50) & (analisis['cantidad'] == 0)
-    analisis['baja_conversion'] = (analisis['visitas'] > 20) & (analisis['tasa_conversion'] < 2)
-    analisis['alta_conversion'] = (analisis['visitas'] > 10) & (analisis['tasa_conversion'] > 5)
+    analisis['sin_visitas_con_stock'] = (
+        (analisis['visitas'] == 0) & (analisis['stock'] > CONFIG["stock_minimo_sin_visitas"])
+    )
+    analisis['muchas_visitas_sin_ventas'] = (
+        (analisis['visitas'] > CONFIG["visitas_muchas_sin_ventas"]) & (analisis['cantidad'] == 0)
+    )
+    analisis['baja_conversion'] = (
+        (analisis['visitas'] > CONFIG["visitas_baja_conversion"])
+        & (analisis['tasa_conversion'] < CONFIG["conversion_baja_pct"])
+    )
+    analisis['alta_conversion'] = (
+        (analisis['visitas'] > CONFIG["visitas_alta_conversion"])
+        & (analisis['tasa_conversion'] > CONFIG["conversion_alta_pct"])
+    )
     
     # Valor del stock
     analisis['valor_stock'] = analisis['precio_actual'] * analisis['stock']
@@ -309,7 +315,7 @@ def generar_reporte_para_claude(analisis):
     
     reporte = {
         "fecha_analisis": datetime.now().isoformat(),
-        "periodo_analizado": "últimos 90 días",
+        "periodo_analizado": f"últimos {CONFIG['ventas_dias']} días",
         "resumen": {
             "total_productos": int(len(analisis)),
             "productos_sin_ventas": int(len(analisis[analisis['cantidad'] == 0])),
@@ -378,9 +384,12 @@ def generar_reporte_para_claude(analisis):
     
     # Oportunidades de ajuste de precio
     oportunidades = analisis[
-        (analisis['cantidad'] > 10) & 
+        (analisis['cantidad'] > CONFIG["min_ventas_oportunidad_precio"]) &
         (analisis['precio_promedio_venta'] > 0) &
-        (analisis['diferencia_precio'].abs() > analisis['precio_actual'] * 0.1)
+        (
+            analisis['diferencia_precio'].abs()
+            > analisis['precio_actual'] * CONFIG["umbral_diferencia_precio_pct"]
+        )
     ].sort_values('cantidad', ascending=False).head(20).to_dict('records')
     reporte['oportunidades_precio'] = oportunidades
     
@@ -460,8 +469,8 @@ def main():
     print(f"\n📊 Productos con visitas: {len(df_productos[df_productos['visitas'] > 0])}")
     print(f"📊 Productos sin visitas: {len(df_productos[df_productos['visitas'] == 0])}")
     
-    print("\n📊 Extrayendo ventas (90 días)...")
-    df_ventas = extraer_ventas(dias=90)
+    print(f"\n📊 Extrayendo ventas ({CONFIG['ventas_dias']} días)...")
+    df_ventas = extraer_ventas(dias=CONFIG["ventas_dias"])
     
     if df_ventas.empty:
         print("⚠️  No hay ventas en el período. Generando reporte solo con productos...")
