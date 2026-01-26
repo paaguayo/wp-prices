@@ -1,0 +1,48 @@
+https://es.wordpress.org/plugins/post-views-counter/
+
+B) Obtener el número de visitas por API (devolver “views” en productos)
+
+Aquí hay 2 formas típicas:
+
+Opción B1) Agregar el campo views al endpoint de productos (recomendado)
+
+Esto hace que cuando pidas /wp-json/wc/v3/products/<id> (o el endpoint de WP), te venga además views.
+
+Añade esto en un plugin propio o en functions.php (mejor en un plugin “mu-plugin” o plugin normal):
+
+add_action('rest_api_init', function () {
+  register_rest_field('product', 'views', [
+    'get_callback' => function ($object) {
+      $post_id = (int) $object['id'];
+
+      // Función del Post Views Counter (documentada por el plugin)
+      if (function_exists('pvc_get_post_views')) {
+        return (int) pvc_get_post_views($post_id, 'total');
+      }
+
+      return 0;
+    },
+    'schema' => [
+      'description' => 'Total views (Post Views Counter)',
+      'type'        => 'integer',
+      'context'     => ['view', 'edit'],
+    ],
+  ]);
+});
+
+
+La función pvc_get_post_views($post_id, 'total') está documentada por el plugin y devuelve el total de vistas.
+
+Cómo se usa luego:
+
+WooCommerce REST:
+
+GET /wp-json/wc/v3/products/123
+
+WordPress REST (si usas product como post type público):
+
+GET /wp-json/wp/v2/product/123
+
+Y en la respuesta verás "views": 1234.
+
+perfecto, ahora cambia la forma de obtener los views y usa la siguiente API. Por ejemplo para el ID 11646 utiliza https://mcielectronics.cl/wp-json/post-views-counter/get-post-views/11646
